@@ -1,0 +1,167 @@
+import azure.functions as func
+import logging, json, base64
+
+
+app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+
+def append_to_txt(email_session_id, content):
+
+    with open(f"{email_session_id}email_body_file.txt", "a", encoding="utf-8") as f:
+ 
+            f.write(content+ "\n")
+
+#append all logs to the 
+def append_all_logs(email_session_id,content):
+    with open(f"{email_session_id}all_logs.txt", "a",encoding="utf-8") as f:
+        f.write(content+ "\n")
+
+
+@app.route(route="email_summary")
+def email_summary(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Python HTTP trigger function processed a request.')
+    from blob_operations import BlobAttachmentHandler
+
+    blob_clss = BlobAttachmentHandler()
+
+    try:
+        from ai_initializtion import AIInitializtion
+        ai_class = AIInitializtion()
+    except Exception as e:
+        logging.error(f'Module error : {e}')
+
+
+    # try:
+    #     from cosmos_logging import CosmosLogs
+    #     cosmos_class = CosmosLogs()
+    # except Exception as e:
+    #     logging.error(f'Module error : {e}')
+
+    try:
+        try:
+            email_payload = req.get_json()
+            logging.warning(f'Initial payload type: {type(email_payload)}')
+            # cosmos_class.upsert_log_entries(log_msg=email_payload,
+            #                                 status="sucess",
+            #                                 session_id=email_payload.get("UID", ""),
+            #                                 )
+
+        except ValueError:
+            # cosmos_class.upsert_log_entries(log_msg="Value Error",
+            #                                 status="Failed")
+            return func.HttpResponse(
+                json.dumps({"error": "Invalid or missing JSON body"}),
+                mimetype="application/json",
+                status_code=400
+            )
+
+
+        # Validating the fields 
+        required_fields = ["UID"]
+        missing_fields = [f for f in required_fields if not email_payload.get(f)]
+        if missing_fields:
+            return func.HttpResponse(
+                json.dumps({"error": f"Missing required fields in payload: {missing_fields}"}),
+                mimetype="application/json",
+                status_code=400
+            )
+        #if fields are missing set it to an empty string
+        email_payload.setdefault("Subject", "")
+        email_payload.setdefault("Body", "")
+        email_payload.setdefault("Attachments", [])
+
+        #extract the value from the json input
+        email_session_id  = email_payload.get("UID", "")
+        email_subject  = email_payload.get("Subject", "")
+        email_body_raw        = email_payload.get("Body", "")           
+        attachments_raw   = email_payload.get("Attachments", [])
+        
+        email_body = f'email subject is : {email_subject}, and email body is : {email_body_raw}'
+        # Deseralizing to   python object
+        if isinstance(attachments_raw, str):
+            try:
+                attachments = json.loads(attachments_raw)
+            except json.JSONDecodeError:
+                logging.error("Attachments JSON parsing failed")
+                attachments = []
+        else:
+            attachments = attachments_raw    
+
+        logging.info(f"Email session id  : {email_session_id}")
+        # logging.info(f"Attachments in payload: {len(attachments_raw)}")
+
+        append_to_txt(email_session_id,email_body)
+        append_all_logs(email_session_id,f'email_pay load : {email_payload}')
+
+        try:
+            
+            blob_result =  blob_clss.uploading_attachments_to_blob(email_session_id,
+                                                                              attachments)
+            extracted_contents = blob_result.get("extracted_contents", {})
+            blob_clss.upload_email_body(f'{email_session_id}email_body_file.txt',email_session_id)
+            append_all_logs(email_session_id,f'extracted_content is : {extracted_contents}')
+ 
+            if not extracted_contents:
+                logging.warning(f"[SESSION {email_session_id}] No content extracted from any attachment.")
+
+            combined_content_parts = []
+ 
+
+            # if email_body:
+            #     combined_content_parts.append(f"[EMAIL BODY]\n{email_body}")
+ 
+
+            for file_name, content in extracted_contents.items():
+                if content:
+                    combined_content_parts.append(f"[ATTACHMENT: {file_name}]\n{content}")
+ 
+            combined_content = "\n\n---\n\n".join(combined_content_parts)
+ 
+            logging.info(
+                f"[SESSION {email_session_id}] Sending combined content to AI. "
+                f"Files: {list(extracted_contents.keys())} | "
+                f"Total chars: {len(combined_content)}"
+            )
+
+ 
+
+            get_ai_response = ai_class.get_extraction(email_session_id,email_body,combined_content )
+            # get_summarised_query = ai_class.get_summarised_query(email_session_id, combined_content)
+            from vector_search import get_top_chunk
+            vclss = get_top_chunk()
+            result = vclss.retriveal_of_top_chunk(combined_content)
+
+            
+            get_nature_of_fraud = ai_class.get_fraud_type(email_session_id,result)
+            append_all_logs(email_session_id, f'AI  response is : {get_ai_response}')
+            blob_clss.upload_email_body(f'{email_session_id}all_logs.txt',email_session_id)
+            return func.HttpResponse( json.dumps(get_nature_of_fraud),
+                                     mimetype="application/json",
+                                     status_code=200)
+        except Exception as e:
+            logging.error(f"Unexpected error: {str(e)}", exc_info=True)
+            return func.HttpResponse(
+                json.dumps({
+                    "error":   "Internal server error",
+                    "message": str(e)
+                }),
+                mimetype="application/json",
+                status_code=500
+            )
+
+
+
+
+
+
+
+
+    except Exception as e:
+        logging.error(f"Unexpected error: {str(e)}", exc_info=True)
+        return func.HttpResponse(
+            json.dumps({
+                "error":   "Internal server error",
+                "message": str(e)
+            }),
+            mimetype="application/json",
+            status_code=500
+        )
