@@ -80,7 +80,7 @@ class ExtractingContent:
 
     def extract_content(self, email_session_id , file_bytes: bytes, file_name: str, blob_handler   ) -> str | None:
         """
-        Extract Documnet Intelligence content
+        Extract Documnet Intelligence content from txt, jpeg, pdf , docx jpg, heic and png 
         
         """
         try:
