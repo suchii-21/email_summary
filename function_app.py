@@ -55,9 +55,9 @@ def get_case_info(req: func.HttpRequest) -> func.HttpResponse:
     user_query = query.get('user_query')
 
     #role validation
-    non_confidential_role = ['Issuers', 'Reviewer','Investigator', 'Referrer']
+    non_confidential_role = ['Issuers', 'Reviewer','Investigator', 'Referrer', 'ICT']
     
-    confidential_role = ['Unit Head', 'ICT', 'System Administrator', 'Whistle-blower Secretary']
+    confidential_role = ['Unit Head',  'System Administrator', 'Whistle-blower Secretary']
 
     if role not in (confidential_role + non_confidential_role):
         logging.error(f'Entered role is : {role}, which is not a valid role')
