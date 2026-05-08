@@ -1,6 +1,7 @@
 import azure.functions as func
 import logging, json
-
+from services.config import Config
+from services.pii_service import PIIService
 from urllib.parse import urlparse
 
 
@@ -24,11 +25,11 @@ def get_case_info(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error(f'Failed to open the vector   file: {e}')
 
-    try:
-        from pii_redaction import PIIREDACTION
+    # try:
+    #     from pii_redaction import PIIREDACTION
    
-    except Exception as e:
-        logging.error(f'Failed to open the pii redaction file   file: {e}')
+    # except Exception as e:
+    #     logging.error(f'Failed to open the pii redaction file   file: {e}')
         
     try:
     #get user_query related 
@@ -45,6 +46,8 @@ def get_case_info(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(json.dumps({"message": "Please enter a valid query regarding staff , customer or a particular case"}),
                                  status_code = 400,
                                  mimetype="application/json")
+    
+    
     
     #extract user_query, and roles, and id
     role = query.get('role')
@@ -83,7 +86,7 @@ def get_case_info(req: func.HttpRequest) -> func.HttpResponse:
         #         status_code= 200,
         #         mimetype="application/json"
         # )
-            # logging.warning(get_relevant_chunks)
+            logging.warning(f'got chunks')
 
             #citation 
             seen = set() #unique url
@@ -108,10 +111,12 @@ def get_case_info(req: func.HttpRequest) -> func.HttpResponse:
                 else:
                     no_citation_count += 1
 
+
             # If no citations found
             if not citations:
                 citations = ['No Citations Found']
 
+            logging.warning(f'Citations :{citations}')
         except Exception as e:
             logging.error(f'Failed to classify the user query due to : {e}')
             return func.HttpResponse(json.dumps({'message':'Please enter a valid query' }),
@@ -130,12 +135,13 @@ def get_case_info(req: func.HttpRequest) -> func.HttpResponse:
 
         #get confidential data based on the role for case_related and the employee related search
         data: list[str] = []
+        result: list[str] = [] #to store the responses
         if query_intent_type in ['case_related', 'customer_related']:
             
 
             if role in non_confidential_role:
                 for get_chunk_data in get_relevant_chunks:
-                    if is_not_confidential(get_chunk_data['confidential']):
+                    if is_not_confidential(get_chunk_data['confidentialflag']):
                         data.append(get_chunk_data['context'])
             else:
                 data = [text['context'] for text in get_relevant_chunks]
@@ -145,7 +151,7 @@ def get_case_info(req: func.HttpRequest) -> func.HttpResponse:
 
             
             result = data
-
+        logging.warning(f'query intent :{query_intent_type}')
 
             
         ##get response for the staff related search
@@ -154,8 +160,8 @@ def get_case_info(req: func.HttpRequest) -> func.HttpResponse:
             case_id = []
             if role in non_confidential_role:
                 for get_chunk_data in get_relevant_chunks:
-                    case_id.append(f"Confidential case id : {get_chunk_data['case_ref_id']}")
-                    if is_not_confidential(get_chunk_data['confidential']):   ##for false
+                    case_id.append(f"Confidential case id : {get_chunk_data['caseid']}")
+                    if is_not_confidential(get_chunk_data['confidentialflag']):   ##for false
                         data.append(get_chunk_data['context'])
                     else:
                         #if data is confidential send only the case id 
@@ -164,6 +170,7 @@ def get_case_info(req: func.HttpRequest) -> func.HttpResponse:
             else:
                data = [text['context'] for text in get_relevant_chunks]
             result = data
+            logging.warning(f'reslt : {result}')
         
         try:
             get_preview_link = PREVIEWFILES()
@@ -172,42 +179,72 @@ def get_case_info(req: func.HttpRequest) -> func.HttpResponse:
             logging.error(f'Failed to get the citations')
             get_link = 'No File to Preview'
             
-        logging.warning(f'og text before redacting : {result}')    
+        # logging.warning(f'og text before redacting : {result}')    
+        # try:
+        #     get_redacted = PIIREDACTION()
+        #     get_redacted_list = get_redacted.redact_pii(result)
+
+        #     get_redacted_pii_value = " ".join([r['redacted_text'] for r in get_redacted_list])
+        #     get_mapped_value = {}
+        #     for r in get_redacted_list:
+        #         get_mapped_value.update(r['mapping'])
+
+        # except Exception as e:
+        #     logging.error(f'Failed to get the redaction due to : {e}')
+        #     get_redacted_pii_value = " No value to redact"  
+        #     get_mapped_value = {}
+
+
         try:
-            get_redacted = PIIREDACTION()
-            get_redacted_list = get_redacted.redact_pii(result)
-
-            get_redacted_pii_value = " ".join([r['redacted_text'] for r in get_redacted_list])
-            get_mapped_value = {}
-            for r in get_redacted_list:
-                get_mapped_value.update(r['mapping'])
-
+                config = Config()
+                pii_service = PIIService(config) 
+                if isinstance(result,list):
+                    redacted_chunks, registry = pii_service.mask_chunks(result)
+                else:
+                    redacted_chunks, registry = pii_service.mask_chunks([result]) 
+            
         except Exception as e:
-            logging.error(f'Failed to get the redaction due to : {e}')
-            get_redacted_pii_value = " No value to redact"  
-            get_mapped_value = {}
+                logging.error(f'error while fetching the response from ai due to : {e}')
+                return func.HttpResponse(json.dumps({"message": "Error while getting the response"}),
+                                        status_code = 500,
+                                        mimetype="application/json")
 
 
         #if semantic chunks are there 
         if get_relevant_chunks:
             try:
                 if query_intent_type in [ 'staff_related' , 'customer_related', 'case_related']:
-                    logging.warning(f"sending to AI redacted value : {get_redacted_pii_value}")
+                    logging.warning(f"sending to AI redacted value : {redacted_chunks}")
                     llm_response = ai_response.get_query_response(
                                                     user_query,
                                                     query_intent_type,
-                                                    get_redacted_pii_value,
+                                                    redacted_chunks,
                                                     ai_response.repeated_offender_prompt)
                     
 
                     logging.warning(f'redacted ai response : {llm_response}')
-                    get_repeated_staff = get_redacted.restore_pii(llm_response, get_mapped_value) # type: ignore
+                    # get_repeated_staff = get_redacted.restore_pii(llm_response, get_mapped_value) # type: ignore
+                    get_repeated_staff = pii_service.restore_pii(llm_response, registry)
                     logging.warning(f'final response : {get_repeated_staff}')
-                    final_response = {
-                        'response' : get_repeated_staff,
-                        'path' : citations,
-                        'preview_link' : get_link
+                    if llm_response == '##ANSNOTFOUND##':
+                        final_response = {
+                        'response' : "Please ensure that your query belongs to a case, staff or an employee",
+                        'path' : [],
+                        'preview_link' : []
                     }
+                    elif llm_response == '##noaccess##':
+                        final_response = {
+                        'response' : "Please make sure that you have a valid role to access this case",
+                        'path' : [],
+                        'preview_link' : []
+                    }
+                    else:
+                        
+                        final_response = {
+                            'response' : get_repeated_staff,
+                            'path' : citations,
+                            'preview_link' : get_link
+                        }
 
                     return func.HttpResponse(
                     json.dumps( final_response),          

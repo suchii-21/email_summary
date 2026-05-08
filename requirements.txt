@@ -12,3 +12,4 @@ azure-appconfiguration-provider
 openai
 azure-storage-blob
 azure.ai.textanalytics
+azure.ai.contentsafety

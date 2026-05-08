@@ -1,7 +1,6 @@
 import os, json, logging
 from azure.identity import  get_bearer_token_provider
 from openai import AzureOpenAI, APIError
-from azure.identity import ClientSecretCredential
 from dotenv import load_dotenv
 load_dotenv()
 from azure.keyvault.secrets import SecretClient
@@ -10,35 +9,28 @@ from azure.appconfiguration.provider import (
     SettingSelector
 )
 from typing import Optional, Any
+from azure.identity import DefaultAzureCredential
 
 class GETGENERATEDRESPONSE:
     """
     
     """
     def __init__(self):
-        self.keyvault_name = os.getenv('keyvault_url')
-        self.kv_uri = f"https://{self.keyvault_name}.vault.azure.net"
-        self.credential = ClientSecretCredential(
-            tenant_id= os.getenv('AZURE_TENANT_ID'), # type: ignore
-            client_id= os.getenv('AZURE_CLIENT_ID'), # type: ignore
-            client_secret=os.getenv('AZURE_CLIENT_SECRET') # type: ignore
-        )
+        self.kv_uri = os.getenv('KEYVAULT_URL')
+        self.credential = DefaultAzureCredential()
 
-        self.kv_client = SecretClient(vault_url=self.kv_uri, credential=self.credential)
+        self.kv_client = SecretClient(vault_url=self.kv_uri, credential=self.credential) # type: ignore
 
-        self.azure_openai_endpoint : str= self.get_kv_secrets('azure-endpoint')
-        self.azure_openai_version : Optional[str]  = self.get_kv_secrets('api-version')
-        self.deployment_name : Optional[str] = self.get_kv_secrets('deploymentname')
         self.app_config_endpoint : Optional[str] = self.get_kv_secrets('app-config-endpoint')
         self.config = load(endpoint = self.app_config_endpoint,  # type: ignore
                            credential = self.credential)
         
 
         self.get_query_intent = self.config['get_query_intent_prompt']
-        # self.customer_queries_prompt = self.config['customer_queries_prompt']
-        # self.case_info_query_prompt = self.config['case_info_query_prompt']
+        self.azure_openai_endpoint = self.config['azure-endpoint']
+        self.azure_openai_version = self.config['pii:openai_api_version']
+        self.deployment_name : Optional[str] = self.config['pii:openai_deployment']
         self.repeated_offender_prompt = self.config['repeated_offender_prompt']
-        # self.top_chunks_prompt = self.config['top_chunks_prompt']
         self.get_query_intent_temp = self.config['get_query_intent_temp']
         self.get_top_chunks_temp = self.config['get_top_chunks_temp']
 
@@ -47,7 +39,7 @@ class GETGENERATEDRESPONSE:
                         "https://cognitiveservices.azure.com/.default"
                         )
 
-        if not all([self.keyvault_name, self.azure_openai_endpoint,self.azure_openai_version,self.deployment_name,self.get_query_intent]):
+        if not all([self.kv_uri, self.azure_openai_endpoint,self.azure_openai_version,self.deployment_name,self.get_query_intent]):
             logging.error("azure  openai environment variables. are missing" )
             raise
 
@@ -90,7 +82,7 @@ class GETGENERATEDRESPONSE:
                 {"role": "system", "content": self.get_query_intent +  "\nAlways respond with a valid JSON object."}, # type: ignore
                 {"role": "user", "content": f'#user_query# is : {user_query}'}
             ],
-            temperature=int(self.get_query_intent_temp),
+            temperature=float(self.get_query_intent_temp),
             response_format={"type": "json_object"}
         )
 
@@ -121,7 +113,7 @@ class GETGENERATEDRESPONSE:
                 {"role": "system", "content": relevant_prompt+ f'##context## are :{context}'}, 
                 {"role": "user", "content": f'#user_query# is : {user_query} and ##user_query_intent## is : {query_intent_type}'}
             ],
-            temperature=int(self.get_top_chunks_temp),
+            temperature=float(self.get_top_chunks_temp),
             # response_format={"type": "json_object"}
         )
 
@@ -130,7 +122,7 @@ class GETGENERATEDRESPONSE:
                 json_output = raw_output
             # if isinstance(raw_output, json):
             #     json_output = json.loads(raw_output) # type: ignore
-            # logging.warning(f'AI response is  is : {json_output}')
+            logging.warning(f'AI response is  is : {json_output}')
             return json_output
         except APIError as e:
             if e.status_code == 400 and "content_filter" in str(e): # type: ignore

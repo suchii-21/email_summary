@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 load_dotenv()
 from urllib.parse import quote
 import mimetypes
+from azure.identity import DefaultAzureCredential
+
+
 class PREVIEWFILES:
     """ 
     class to preview the files for 1 hour
@@ -14,15 +17,11 @@ class PREVIEWFILES:
     """
 
     def __init__(self) :
-        self.keyvault_name = os.getenv('keyvault_url')
-        self.kv_uri = f"https://{self.keyvault_name}.vault.azure.net"
-        self.credential = ClientSecretCredential(
-            tenant_id= os.getenv('AZURE_TENANT_ID'), # type: ignore
-            client_id= os.getenv('AZURE_CLIENT_ID'), # type: ignore
-            client_secret=os.getenv('AZURE_CLIENT_SECRET') # type: ignore
-        )
+        self.kv_uri = os.getenv('keyvault_url')
+        # self.kv_uri = f"https://{self.keyvault_name}.vault.azure.net"
+        self.credential = DefaultAzureCredential()
 
-        self.kv_client = SecretClient(vault_url=self.kv_uri, credential=self.credential)
+        self.kv_client = SecretClient(vault_url=self.kv_uri, credential=self.credential) # type: ignore
         self.account_name = self.get_kv_secrets('blob-account-name')
 
     def get_kv_secrets(self, secret_name: str)->str:

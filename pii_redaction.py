@@ -5,7 +5,7 @@ from azure.identity import ClientSecretCredential
 from azure.keyvault.secrets import SecretClient
 from azure.ai.textanalytics import TextAnalyticsClient
 import re
-
+from azure.identity import DefaultAzureCredential
 
 categories_pii = {
     "Person":           "person",
@@ -19,7 +19,6 @@ categories_pii = {
 
     
 }
-
 
 custom_pii = {
     "staffid":  r'\bstaff\s*id\s*[:\-]?\s*\d{4,8}\b',
@@ -35,15 +34,11 @@ class PIIREDACTION:
     """
 
     def __init__(self) :
-        self.keyvault_name = os.getenv('keyvault_url')
-        self.kv_uri = f"https://{self.keyvault_name}.vault.azure.net"
-        self.credential = ClientSecretCredential(
-            tenant_id= os.getenv('AZURE_TENANT_ID'), # type: ignore
-            client_id= os.getenv('AZURE_CLIENT_ID'), # type: ignore
-            client_secret=os.getenv('AZURE_CLIENT_SECRET') # type: ignore
-        )
+        self.kv_uri = os.getenv('keyvault_url')
+        # self.kv_uri = f"https://{self.keyvault_name}.vault.azure.net"
+        self.credential = DefaultAzureCredential()
 
-        self.kv_client = SecretClient(vault_url=self.kv_uri, credential=self.credential)
+        self.kv_client = SecretClient(vault_url=self.kv_uri, credential=self.credential) # type: ignore
         self.language_endpoint = self.get_kv_secrets('language-endpoint')
 
         self.ai_client = TextAnalyticsClient(endpoint=self.language_endpoint, credential=self.credential)
