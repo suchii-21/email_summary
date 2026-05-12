@@ -1,13 +1,17 @@
 import os, time
 import json
 import logging
-from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.core.credentials import AzureKeyCredential
 from dotenv import load_dotenv
 load_dotenv()
 from azure.keyvault.secrets import SecretClient
 from azure.identity import DefaultAzureCredential
 from azure.identity import ClientSecretCredential
+from azure.ai.documentintelligence import DocumentIntelligenceClient
+from azure.appconfiguration.provider import (
+    load,
+    SettingSelector
+)
 
 # try:
 #     from cosmos_logging import CosmosLogs
@@ -19,20 +23,24 @@ from azure.identity import ClientSecretCredential
 class ExtractingContent:
 
     def __init__(self):
-        self.keyvault_name = os.getenv('keyvault_url')
-        self.kv_uri = f"https://{self.keyvault_name}.vault.azure.net"
+        self.kv_uri = os.getenv('keyvault_url')
+        # self.kv_uri = f"https://{self.keyvault_name}.vault.azure.net"
 
-        self.credential = ClientSecretCredential(
-            tenant_id= os.getenv('AZURE_TENANT_ID'), # type: ignore
-            client_id= os.getenv('AZURE_CLIENT_ID'), # type: ignore
-            client_secret=os.getenv('AZURE_CLIENT_SECRET') # type: ignore
-        )
+        # self.credential = ClientSecretCredential(
+        #     tenant_id= os.getenv('AZURE_TENANT_ID'), # type: ignore
+        #     client_id= os.getenv('AZURE_CLIENT_ID'), # type: ignore
+        #     client_secret=os.getenv('AZURE_CLIENT_SECRET') # type: ignore
+        # )
+        self.credential = DefaultAzureCredential()
         self.kv_client = SecretClient(vault_url=self.kv_uri, credential=self.credential)
+        self.app_config_endpoint = self.get_kv_secrets('app-config-endpoint')
+        self.config = load(endpoint = self.app_config_endpoint,  # type: ignore
+                           credential = self.credential)
 
-        self.doc_endpoint = self.get_kv_secrets('doc-int-endpoint')
-        # self.doc_int_key = os.getenv("DOC_INT_KEY")
+        self.doc_endpoint = self.config['fid-cms:shared:doc-intelligence:endpoint']
 
-        if not all([self.doc_endpoint, self.keyvault_name]):
+
+        if not all([self.doc_endpoint, self.kv_uri]):
              logging.error("Missing required environment variables: ")
 
         self.doc_int_client = DocumentIntelligenceClient(
@@ -59,8 +67,10 @@ class ExtractingContent:
         return None
 
 
-    def write_to_json(self, extracted_content, file_name: str, json_file: str = "content_json.json") -> None:
+    def write_to_json(self, extracted_content, file_name: str, json_file: str = "/tmp/email_sessions/content_json.json") -> None:
         try:
+            os.makedirs("/tmp/email_sessions", exist_ok=True)
+
             if os.path.exists(json_file):
                 with open(json_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -71,6 +81,8 @@ class ExtractingContent:
 
             with open(json_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4)
+
+            logging.info(f"[JSON] Written '{file_name}' to '{json_file}'")
 
         except (OSError, json.JSONDecodeError) as e:
             logging.error(f"Failed to write to JSON file '{json_file}': {e}")

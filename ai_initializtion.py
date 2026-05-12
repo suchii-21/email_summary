@@ -1,6 +1,6 @@
 import os, logging, json
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-from openai import AzureOpenAI
+from openai import AzureOpenAI, APIError
 from azure.identity import ClientSecretCredential
 from dotenv import load_dotenv
 load_dotenv()
@@ -10,7 +10,7 @@ from azure.appconfiguration.provider import (
     load,
     SettingSelector
 )
-
+from typing import Optional
 # try:
 #     from cosmos_logging import CosmosLogs
 #     cosmos_class = CosmosLogs()
@@ -20,22 +20,24 @@ from azure.appconfiguration.provider import (
 class AIInitializtion:
 
     def __init__(self):
-        self.keyvault_name = os.getenv('keyvault_url')
-        self.kv_uri = f"https://{self.keyvault_name}.vault.azure.net"
-        self.credential = ClientSecretCredential(
-            tenant_id= os.getenv('AZURE_TENANT_ID'), # type: ignore
-            client_id= os.getenv('AZURE_CLIENT_ID'), # type: ignore
-            client_secret=os.getenv('AZURE_CLIENT_SECRET') # type: ignore
-        )
-
-        self.kv_client = SecretClient(vault_url=self.kv_uri, credential=self.credential)
-
-        self.azure_openai_endpoint = self.get_kv_secrets('azure-endpoint')
-        self.azure_openai_version = self.get_kv_secrets('api-version')
-        self.deployment_name = self.get_kv_secrets('deploymentname')
-        self.azure_endpoint = self.get_kv_secrets('app-config-endpoint')
-        self.config = load(endpoint = self.azure_endpoint,  # type: ignore
+        self.kv_uri = os.getenv('keyvault_url')
+        # self.kv_uri = f"https://{self.keyvault_name}.vault.azure.net"
+        # self.credential = ClientSecretCredential(
+        #     tenant_id= os.getenv('AZURE_TENANT_ID'), # type: ignore
+        #     client_id= os.getenv('AZURE_CLIENT_ID'), # type: ignore
+        #     client_secret=os.getenv('AZURE_CLIENT_SECRET') # type: ignore
+        # )
+        self.credential = DefaultAzureCredential()
+        self.kv_client = SecretClient(vault_url=self.kv_uri, credential=self.credential)# type: ignore
+        self.app_config_endpoint = self.get_kv_secrets('app-config-endpoint')
+        self.config = load(endpoint = self.app_config_endpoint,  # type: ignore
                            credential = self.credential)
+
+        self.get_query_intent = self.config['get_query_intent_prompt']
+        self.azure_openai_endpoint = self.config['azure-endpoint']
+        self.azure_openai_version = self.config['pii:openai_api_version']
+        self.deployment_name : Optional[str] = self.config['pii:openai_deployment']
+
         
         # self.entities_extraction_prompt =  os.getenv('entities_extraction_prompt')
         self.nature_of_fraud_detection = self.config['nature_of_fraud_detection']
@@ -46,7 +48,7 @@ class AIInitializtion:
                         "https://cognitiveservices.azure.com/.default"
                         )
         # self.api_key = os.getenv('azure_api_key')
-        if not all([self.keyvault_name, self.azure_openai_endpoint,self.azure_openai_version,self.deployment_name,self.entities_extraction_prompt]):
+        if not all([self.kv_uri, self.azure_openai_endpoint,self.azure_openai_version,self.deployment_name,self.entities_extraction_prompt]):
             logging.error("azure  openai environment variables." )
 
         
@@ -83,15 +85,17 @@ class AIInitializtion:
             print(f"Error fetching secret {secret_name}: {str(e)}")
             return None
 
-    def get_extraction(self, session_id, email_body, extracted_content):
+    def get_extraction(self, session_id, extracted_content):
         try:
             response = self.azure_model_client.chat.completions.create(
                 model=self.deployment_name, # type: ignore
                 messages=[
                     {"role": "system", "content": self.entities_extraction_prompt + "\nAlways respond with a valid JSON object."}, # type: ignore
-                    {"role": "user", "content": f'#extractedcontent# is : {extracted_content}, and ##emailbody## is : {email_body}'}
+                    {"role": "user", "content": f'##extracted_content##  : {extracted_content}'}
+                    
+                     #extractedcontent# is : {extracted_content}, and ##emailbody## is : {email_body}'}
                 ],
-                temperature=0, # Need to keep it app configuration service
+                temperature=0, 
                 response_format={"type": "json_object"}
             )
 
@@ -125,6 +129,14 @@ class AIInitializtion:
                     logging.info('All fields are present')
 
             return json_output   # return dict, not the raw string
+        except APIError as e:
+            if e.status_code == 400 and "content_filter" in str(e): # type: ignore
+                logging.error("Request blocked by content filter")
+                return {"description" : '',
+                    'adib_issaffinvolved' : '',
+                    'adib_staffid' : '',
+                    'adib_amount': '',
+                    'customer_name': '' }
 
         except Exception as e:
             logging.error(f'Failed to fetch response due to: {e}')
@@ -154,13 +166,15 @@ class AIInitializtion:
     #         logging.error(f'Failed to get the summary of the extracted content   due to : {e}')
     #         return None
 
-    def get_fraud_type(self,session_id,extracted_content):
+    def get_fraud_type(self,description, session_id,extracted_content):
+                      
         try:
             response = self.azure_model_client.chat.completions.create(
             model=self.deployment_name, # type: ignore
             messages=[
                 {"role": "system", "content": self.nature_of_fraud_detection}, # type: ignore
-                {"role": "user", "content": f'#extractedcontent# is : {extracted_content}'}
+                {"role": "user", "content": f'#extractedcontent# is : {extracted_content}, description is : {description}'}
+                 
             ],
             temperature=0,
             response_format={"type": "json_object"}
@@ -170,6 +184,11 @@ class AIInitializtion:
             json_output = json.loads(raw_output) # type: ignore
             logging.warning(f'email session id : {session_id} nature of fraud is : {json_output}')
             return json_output
+        
+        except APIError as e:
+            if e.status_code == 400 and "content_filter" in str(e): # type: ignore
+                logging.error("Request blocked by content filter")
+                return {'nature_of_fraud': 'other'}
         except Exception as e:
             logging.error(f'Failed to get the nature of fraud due to : {e}')
-            return {'nature_of_fraud': ''}
+            return {'nature_of_fraud': 'other'}
